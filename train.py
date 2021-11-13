@@ -352,7 +352,7 @@ def train(step):
         loss_style = criterion(y_style, label)
         optimizer_style.zero_grad()
         loss_style.backward(retain_graph=True)
-        optimizer_style.step()
+        #optimizer_style.step()
     
         # learn style_adv
         loss_adv = args.w_adv * criterion_adv(y_style)
@@ -360,12 +360,14 @@ def train(step):
         loss_adv.backward(retain_graph=True)
         if args.clip_adv is not None:
             torch.nn.utils.clip_grad_norm_(model.module.adv_params(), args.clip_adv)
-        optimizer_adv.step()
+        #optimizer_adv.step()
     
     # learn content
     loss = criterion(y, label)
     optimizer.zero_grad()
     loss.backward()
+    optimizer_style.step()
+    optimizer_adv.step()
     optimizer.step()
 
     time_net = time.time() - tic
