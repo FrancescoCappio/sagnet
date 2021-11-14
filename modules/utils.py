@@ -4,6 +4,7 @@ import json
 import numpy as np
 
 import torch
+from sklearn.metrics import roc_auc_score
 
 
 class Logger(object):
@@ -51,8 +52,34 @@ def compute_accuracy(pred, label):
     acc = correct / len(label)
     return acc
 
+def closed_set_accuracy(pred, label, known_classes):
+    if not isinstance(pred, np.ndarray):
+        pred = pred.data.cpu().numpy()
+    if not isinstance(label, np.ndarray):
+        label = label.data.cpu().numpy()
+    pred = pred.argmax(axis=1)
+    correct = (pred == label).sum()
+    total = (label<known_classes).sum()
+    acc = correct / total
+    return acc
 
-def save_result(result, save_dir):
+def compute_auroc(pred, label, known_classes):
+    if not isinstance(pred, np.ndarray):
+        pred = pred.data.cpu().numpy()
+    if not isinstance(label, np.ndarray):
+        label = label.data.cpu().numpy()
+
+    scores = pred.max(axis=1)
+    ood_labels = np.ones_like(label)
+    ood_labels[label>=known_classes] = 0
+    auroc = roc_auc_score(ood_labels, scores)
+    return auroc
+
+
+
+
+
+def save_result(result, predictions, save_dir):
     def _dumper(obj):
         try:
             return obj.toJSON()
@@ -60,6 +87,10 @@ def save_result(result, save_dir):
             return obj.__dict__
     with open(os.path.join(save_dir, 'result.json'), 'w') as fp:
         json.dump(result, fp, default=_dumper, indent=4)
+
+    with open(os.path.join(save_dir, 'predictions.txt'), "w") as f_out:
+        for idx, preds in enumerate(predictions):
+            f_out.write(f"{idx},{preds.argmax()},{preds.max()}\n")
 
 
 def save_model(model, save_dir, postfix):

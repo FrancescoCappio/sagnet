@@ -111,7 +111,7 @@ def main(args):
         args.targets = [d for d in all_domains if d not in args.sources]
 
     # Set save dir
-    save_dir = os.path.join(args.save_dir, args.dataset, args.method, ','.join(args.sources))
+    save_dir = os.path.join(args.save_dir, args.dataset, args.method, ','.join(args.sources)+"_to_" + ','.join(args.targets))
     print('Save directory: {}'.format(save_dir))
     os.makedirs(save_dir, exist_ok=True)
 
@@ -167,7 +167,7 @@ def main(args):
                 status['val_acc'][domain] = test(loader_vals[i])
             for i, domain in enumerate(args.targets):
                 print('Test: {}'.format(domain))
-                status['test_acc'][domain] = test(loader_tgts[i])
+                status['test_acc'][domain], test_preds = test(loader_tgts[i], test=True)
             
             status['mean_val_acc'] = sum(status['val_acc'].values()) / len(status['val_acc'])
             status['mean_test_acc'] = sum(status['test_acc'].values()) / len(status['test_acc'])
@@ -178,12 +178,13 @@ def main(args):
                     ', '.join(['{}: {:.5f}'.format(k, v) for k, v in status['test_acc'].items()])))
             
             results.append(copy.deepcopy(status))
-            save_result(results, save_dir)
+            save_result(results, test_preds, save_dir)
 
 
 def init_loader():
     global loader_srcs, loader_vals, loader_tgts
-    global num_classes
+    global num_classes, known_classes
+    global open_set
 
     # Set transforms
     stats = ((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
@@ -231,6 +232,67 @@ def init_loader():
                              transform=test_transform)
                         for domain in args.targets]
         num_classes = 7
+        open_set = False
+
+    elif args.dataset == "pacs_open_dg_single_source":
+        open_set = True
+        from data.simple_dataset import SimpleDataset, dataset_info
+        image_dir = os.path.join(args.dataset_dir, "pacs", 'images', 'kfold')
+        split_dir = os.path.join(args.dataset_dir, "pacs", 'splits')
+
+        first_class = 1     # or 0, it depends on how classes are numbered in the txt files
+        known_classes = 6
+
+        dataset_srcs = []
+        dataset_vals = []
+
+        def load_and_filter_known(domain, split, transform):
+            names, labels = dataset_info(os.path.join(split_dir, f"{domain}_{split}_kfold.txt"),first_class)
+            # filter only known_classes
+            np_labels = np.array(labels)
+            np_names = np.array(names)
+
+            known_mask = np_labels < known_classes
+
+            return SimpleDataset(image_dir, np_names[known_mask], np_labels[known_mask], transforms=transform)
+
+        for src in args.sources:
+            dataset_srcs.append(load_and_filter_known(src, 'train', transform=train_transform))
+            dataset_vals.append(load_and_filter_known(src, 'crossval', transform=test_transform))
+
+        dataset_tgts = []
+        for tgt in args.targets:
+            names, labels = dataset_info(os.path.join(split_dir, f"{tgt}_test_kfold.txt"), first_class)
+            dataset_tgts.append(SimpleDataset(image_dir, names, labels, transforms=test_transform))
+
+        num_classes = known_classes
+
+    elif args.dataset == "officehome_open_dg_single_source":
+        open_set = True
+        from data.simple_dataset import SimpleDataset, dataset_info
+        image_dir = os.path.join(args.dataset_dir, "officehome_ss", 'images')
+        split_dir = os.path.join(args.dataset_dir, "officehome_ss", 'txt_files')
+
+        first_class = 0     # or 0, it depends on how classes are numbered in the txt files
+        known_classes = 25
+
+        dataset_srcs = []
+        dataset_vals = []
+
+        for src in args.sources:
+            names, labels = dataset_info(os.path.join(split_dir, f"{src}.txt"))
+            train_ds = SimpleDataset(image_dir, names, labels, transforms=train_transform)
+            val_ds = SimpleDataset(image_dir, names, labels, transforms=test_transform)
+            dataset_srcs.append(train_ds)
+            dataset_vals.append(val_ds)
+
+        dataset_tgts = []
+        for tgt in args.targets:
+            names, labels = dataset_info(os.path.join(split_dir, f"{tgt}.txt"), first_class)
+            dataset_tgts.append(SimpleDataset(image_dir, names, labels, transforms=test_transform))
+
+        num_classes = known_classes
+
     else:
         raise NotImplementedError('Unknown dataset: {}'.format(args.dataset))
 
@@ -390,7 +452,7 @@ def train(step):
             ', '.join(['{} {}'.format(k, v) for k, v in status['src'].items()])))
     
 
-def test(loader_tgt):
+def test(loader_tgt, test=False):
     model.eval()
     preds, labels = [], []
     for batch_idx, (data, label) in enumerate(loader_tgt):
@@ -411,6 +473,10 @@ def test(loader_tgt):
     preds = np.concatenate(preds, axis=0)
     labels = np.concatenate(labels, axis=0)
     acc = compute_accuracy(preds, labels)
+    if test and open_set:
+        print("Closed set Acc: {:.6f}".format(closed_set_accuracy(preds, labels, known_classes)))
+        print("Auroc: {:.6f}".format(compute_auroc(preds, labels, known_classes)))
+        return acc, preds
     return acc
 
 
