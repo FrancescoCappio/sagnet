@@ -27,10 +27,13 @@ parser.add_argument('--sources', type=str, nargs='*',
                     help='domains for train')
 parser.add_argument('--targets', type=str, nargs='*',
                     help='domains for test')
+parser.add_argument('--five_shot', action='store_true',
+                    help="enable 5-shot finetuning")
 
 # save dir
 parser.add_argument('--save-dir', type=str, default='checkpoint',
                     help='home directory to save model')
+parser.add_argument('--suffix', type=str, default='any')
 parser.add_argument('--method', type=str, default='sagnet',
                     help='method name')
 
@@ -97,6 +100,7 @@ parser.add_argument('-g', '--gpu-id', type=str, default='0',
 
 def main(args):
     global status
+    global save_dir
 
     # Set gpus
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_id
@@ -112,6 +116,9 @@ def main(args):
 
     # Set save dir
     save_dir = os.path.join(args.save_dir, args.dataset, args.method, ','.join(args.sources)+"_to_" + ','.join(args.targets))
+    if args.five_shot:
+        save_dir += '_five_shot'
+    save_dir += "_"+args.suffix
     print('Save directory: {}'.format(save_dir))
     os.makedirs(save_dir, exist_ok=True)
 
@@ -204,6 +211,11 @@ def init_loader():
                         transforms.ToTensor(),
                         transforms.Normalize(*stats)])
 
+    def save_filtered_data(names, labels):
+        with open(save_dir + "/train_data.txt", "w") as out_f:
+            for n, l in zip(names, labels):
+                out_f.write(f"{n} {l}\n")
+
     # Set datasets
     if args.dataset == 'pacs':
         from data.pacs import PACS
@@ -234,9 +246,94 @@ def init_loader():
         num_classes = 7
         open_set = False
 
+    elif args.dataset == "pacs_open_dg_multi_source":
+        open_set = True
+        from data.simple_dataset import SimpleDataset, dataset_info, dataset_info_per_domain, filter_k_shot
+        image_dir = os.path.join(args.dataset_dir, "PACS_Open_DG", 'images')
+        split_dir = os.path.join(args.dataset_dir, "PACS_Open_DG", 'txt_files')
+
+        first_class = 0     # or 0, it depends on how classes are numbered in the txt files
+        known_classes = 6
+
+        dataset_srcs = []
+        dataset_vals = []
+
+        for src in args.sources:
+            names, labels = dataset_info_per_domain(os.path.join(split_dir, f"{src}.txt"))
+
+            for k in names.keys():
+                train_ds = SimpleDataset(image_dir, names[k], labels[k], transforms=train_transform)
+                val_ds = SimpleDataset(image_dir, names[k], labels[k], transforms=test_transform)
+                dataset_srcs.append(train_ds)
+                dataset_vals.append(val_ds)
+
+        dataset_tgts = []
+        for tgt in args.targets:
+            names, labels = dataset_info(os.path.join(split_dir, f"{tgt}.txt"), first_class)
+            dataset_tgts.append(SimpleDataset(image_dir, names, labels, transforms=test_transform))
+
+        num_classes = known_classes
+
+    elif args.dataset == "officehome_open_dg_multi_source":
+        open_set = True
+        from data.simple_dataset import SimpleDataset, dataset_info, dataset_info_per_domain, filter_k_shot
+        image_dir = os.path.join(args.dataset_dir, "OfficeHome_Open_DG", 'images')
+        split_dir = os.path.join(args.dataset_dir, "OfficeHome_Open_DG", 'txt_files')
+
+        first_class = 0     # or 0, it depends on how classes are numbered in the txt files
+        known_classes = 54
+
+        dataset_srcs = []
+        dataset_vals = []
+
+        for src in args.sources:
+            names, labels = dataset_info_per_domain(os.path.join(split_dir, f"{src}.txt"))
+
+            for k in names.keys():
+                train_ds = SimpleDataset(image_dir, names[k], labels[k], transforms=train_transform)
+                val_ds = SimpleDataset(image_dir, names[k], labels[k], transforms=test_transform)
+                dataset_srcs.append(train_ds)
+                dataset_vals.append(val_ds)
+
+        dataset_tgts = []
+        for tgt in args.targets:
+            names, labels = dataset_info(os.path.join(split_dir, f"{tgt}.txt"), first_class)
+            dataset_tgts.append(SimpleDataset(image_dir, names, labels, transforms=test_transform))
+
+        num_classes = known_classes
+
+    elif args.dataset == "multidataset_open_dg_multi_source":
+        open_set = True
+        from data.simple_dataset import SimpleDataset, dataset_info, dataset_info_per_domain, filter_k_shot
+        image_dir = os.path.join(args.dataset_dir, "MultiDatasets", 'images')
+        split_dir = os.path.join(args.dataset_dir, "MultiDatasets", 'txt_files')
+
+        first_class = 0     # or 0, it depends on how classes are numbered in the txt files
+        known_classes = 54
+
+        dataset_srcs = []
+        dataset_vals = []
+
+        for src in args.sources:
+            names, labels = dataset_info_per_domain(os.path.join(split_dir, f"{src}.txt"))
+
+            for k in names.keys():
+                train_ds = SimpleDataset(image_dir, names[k], labels[k], transforms=train_transform)
+                val_ds = SimpleDataset(image_dir, names[k], labels[k], transforms=test_transform)
+                dataset_srcs.append(train_ds)
+                dataset_vals.append(val_ds)
+
+        dataset_tgts = []
+        for tgt in args.targets:
+            names, labels = dataset_info(os.path.join(split_dir, f"{tgt}.txt"), first_class)
+            dataset_tgts.append(SimpleDataset(image_dir, names, labels, transforms=test_transform))
+
+        num_classes = known_classes
+
+
     elif args.dataset == "pacs_open_dg_single_source":
         open_set = True
-        from data.simple_dataset import SimpleDataset, dataset_info
+        from data.simple_dataset import SimpleDataset, dataset_info, filter_k_shot
         image_dir = os.path.join(args.dataset_dir, "pacs", 'images', 'kfold')
         split_dir = os.path.join(args.dataset_dir, "pacs", 'splits')
 
@@ -253,8 +350,13 @@ def init_loader():
             np_names = np.array(names)
 
             known_mask = np_labels < known_classes
+            known_names = np_names[known_mask]
+            known_labels = np_labels[known_mask]
+            if split == "train" and args.five_shot:
+                known_names, known_labels = filter_k_shot(known_names, known_labels, k=5)
+                save_filtered_data(known_names, known_labels)
 
-            return SimpleDataset(image_dir, np_names[known_mask], np_labels[known_mask], transforms=transform)
+            return SimpleDataset(image_dir, known_names, known_labels, transforms=transform)
 
         for src in args.sources:
             dataset_srcs.append(load_and_filter_known(src, 'train', transform=train_transform))
@@ -269,7 +371,7 @@ def init_loader():
 
     elif args.dataset == "officehome_open_dg_single_source":
         open_set = True
-        from data.simple_dataset import SimpleDataset, dataset_info
+        from data.simple_dataset import SimpleDataset, dataset_info, filter_k_shot
         image_dir = os.path.join(args.dataset_dir, "officehome_ss", 'images')
         split_dir = os.path.join(args.dataset_dir, "officehome_ss", 'txt_files')
 
@@ -281,6 +383,11 @@ def init_loader():
 
         for src in args.sources:
             names, labels = dataset_info(os.path.join(split_dir, f"{src}.txt"))
+
+            if args.five_shot:
+                names, labels = filter_k_shot(names, labels, k=5)
+                save_filtered_data(names, labels)
+
             train_ds = SimpleDataset(image_dir, names, labels, transforms=train_transform)
             val_ds = SimpleDataset(image_dir, names, labels, transforms=test_transform)
             dataset_srcs.append(train_ds)
@@ -302,7 +409,7 @@ def init_loader():
                         dataset,
                         batch_size=args.batch_size, 
                         shuffle=True, 
-                        drop_last=True, 
+                        drop_last=False, 
                         **kwargs)
                    for dataset in dataset_srcs]
     loader_vals = [torch.utils.data.DataLoader(
@@ -474,8 +581,8 @@ def test(loader_tgt, test=False):
     labels = np.concatenate(labels, axis=0)
     acc = compute_accuracy(preds, labels)
     if test and open_set:
-        print("Closed set Acc: {:.6f}".format(closed_set_accuracy(preds, labels, known_classes)))
-        print("Auroc: {:.6f}".format(compute_auroc(preds, labels, known_classes)))
+        print("Closed set Acc: {:.6f}".format(100*closed_set_accuracy(preds, labels, known_classes)))
+        print("Auroc: {:.6f}".format(100*compute_auroc(preds, labels, known_classes)))
         return acc, preds
     return acc
 
